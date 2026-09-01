@@ -1,10 +1,11 @@
 """
-Technical indicator calculations using pandas-ta.
-Covers EMA, Bollinger Bands, MACD, ATR Trailing Stop.
+Technical indicator calculations using pure pandas + numpy.
+No pandas-ta dependency — works reliably on Streamlit Cloud.
+Covers: EMA, Bollinger Bands, MACD, ATR Trailing Stop.
 """
 
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 import yfinance as yf
 import logging
 
@@ -29,105 +30,105 @@ def fetch_ohlc(ticker: str, interval: str, period: str) -> pd.DataFrame | None:
 
 
 def calc_ema(df: pd.DataFrame, length: int) -> float | None:
-    """Return latest EMA value."""
+    """EMA using pandas ewm."""
     try:
-        ema = ta.ema(df["Close"], length=length)
-        if ema is None or ema.empty:
-            return None
+        ema = df["Close"].ewm(span=length, adjust=False).mean()
         return float(ema.iloc[-1])
     except Exception:
         return None
 
 
 def calc_bb(df: pd.DataFrame, length: int = 20, std: float = 2.0) -> dict | None:
-    """Return latest Bollinger Band values: upper, mid, lower."""
+    """Bollinger Bands using rolling mean + std."""
     try:
-        bb = ta.bbands(df["Close"], length=length, std=std)
-        if bb is None or bb.empty:
-            return None
-        upper_col = [c for c in bb.columns if "BBU" in c]
-        lower_col = [c for c in bb.columns if "BBL" in c]
-        mid_col   = [c for c in bb.columns if "BBM" in c]
-        if not upper_col:
-            return None
+        close  = df["Close"]
+        mid    = close.rolling(length).mean()
+        sigma  = close.rolling(length).std(ddof=0)
+        upper  = mid + std * sigma
+        lower  = mid - std * sigma
         return {
-            "upper": float(bb[upper_col[0]].iloc[-1]),
-            "mid":   float(bb[mid_col[0]].iloc[-1])   if mid_col   else None,
-            "lower": float(bb[lower_col[0]].iloc[-1]) if lower_col else None,
+            "upper": float(upper.iloc[-1]),
+            "mid":   float(mid.iloc[-1]),
+            "lower": float(lower.iloc[-1]),
         }
     except Exception:
         return None
 
 
-def calc_macd(df: pd.DataFrame, fast=12, slow=26, signal=9) -> dict | None:
-    """Return latest MACD line, signal line, histogram."""
+def calc_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> dict | None:
+    """MACD using EWM."""
     try:
-        macd = ta.macd(df["Close"], fast=fast, slow=slow, signal=signal)
-        if macd is None or macd.empty:
-            return None
-        macd_col = [c for c in macd.columns if c.startswith("MACD_")]
-        sig_col  = [c for c in macd.columns if c.startswith("MACDs_")]
-        hist_col = [c for c in macd.columns if c.startswith("MACDh_")]
-        if not macd_col:
-            return None
+        close      = df["Close"]
+        ema_fast   = close.ewm(span=fast,   adjust=False).mean()
+        ema_slow   = close.ewm(span=slow,   adjust=False).mean()
+        macd_line  = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        histogram  = macd_line - signal_line
         return {
-            "macd":      float(macd[macd_col[0]].iloc[-1]),
-            "signal":    float(macd[sig_col[0]].iloc[-1])  if sig_col  else None,
-            "histogram": float(macd[hist_col[0]].iloc[-1]) if hist_col else None,
+            "macd":      float(macd_line.iloc[-1]),
+            "signal":    float(signal_line.iloc[-1]),
+            "histogram": float(histogram.iloc[-1]),
         }
+    except Exception:
+        return None
+
+
+def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series | None:
+    """Average True Range."""
+    try:
+        high  = df["High"]
+        low   = df["Low"]
+        close = df["Close"]
+        tr    = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low  - close.shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        atr   = tr.ewm(span=period, adjust=False).mean()
+        return atr
     except Exception:
         return None
 
 
 def calc_atr_trailing_stop(df: pd.DataFrame, period: int = 14, multiplier: float = 3.0) -> dict | None:
     """
-    ATR Trailing Stop — like the one on your Zerodha chart.
+    ATR Trailing Stop — matches the indicator on your Zerodha chart.
     Returns: { "atr_stop": float, "signal": "buy" | "sell" }
-    Buy  signal = price above ATR stop (green dots below price)
-    Sell signal = price below ATR stop (red dots above price)
     """
     try:
-        atr = ta.atr(df["High"], df["Low"], df["Close"], length=period)
-        if atr is None or atr.empty:
+        close    = df["Close"].values
+        atr_vals = calc_atr(df, period)
+        if atr_vals is None:
             return None
-        close      = df["Close"]
-        atr_vals   = atr
-        stop       = close.copy() * 0
-        trend      = pd.Series(1, index=close.index)  # 1=up, -1=down
+        atr = atr_vals.values
+
+        stop  = np.zeros(len(close))
+        trend = np.ones(len(close))   # 1=up, -1=down
 
         for i in range(1, len(close)):
-            prev_stop  = stop.iloc[i - 1]
-            prev_close = close.iloc[i - 1]
-            curr_close = close.iloc[i]
-            curr_atr   = atr_vals.iloc[i]
-
-            if pd.isna(curr_atr):
-                stop.iloc[i] = prev_stop
-                trend.iloc[i] = trend.iloc[i - 1]
+            if np.isnan(atr[i]):
+                stop[i]  = stop[i - 1]
+                trend[i] = trend[i - 1]
                 continue
 
-            up_stop   = curr_close - multiplier * curr_atr
-            down_stop = curr_close + multiplier * curr_atr
+            up_stop   = close[i] - multiplier * atr[i]
+            down_stop = close[i] + multiplier * atr[i]
 
-            if trend.iloc[i - 1] == 1:
-                new_stop = max(up_stop, prev_stop) if curr_close > prev_stop else down_stop
-                trend.iloc[i] = 1 if curr_close > new_stop else -1
+            if trend[i - 1] == 1:
+                new_stop = max(up_stop, stop[i - 1]) if close[i] > stop[i - 1] else down_stop
+                trend[i] = 1 if close[i] > new_stop else -1
             else:
-                new_stop = min(down_stop, prev_stop) if curr_close < prev_stop else up_stop
-                trend.iloc[i] = -1 if curr_close < new_stop else 1
+                new_stop = min(down_stop, stop[i - 1]) if close[i] < stop[i - 1] else up_stop
+                trend[i] = -1 if close[i] < new_stop else 1
+            stop[i] = new_stop
 
-            stop.iloc[i] = new_stop
-
-        latest_stop  = float(stop.iloc[-1])
-        latest_close = float(close.iloc[-1])
-        signal       = "buy" if latest_close > latest_stop else "sell"
-        return {"atr_stop": round(latest_stop, 2), "signal": signal}
+        signal = "buy" if close[-1] > stop[-1] else "sell"
+        return {"atr_stop": round(float(stop[-1]), 2), "signal": signal}
     except Exception:
         return None
 
 
 def get_close(df: pd.DataFrame) -> float | None:
-    """Return latest close price."""
     try:
         return float(df["Close"].iloc[-1])
     except Exception:
@@ -135,12 +136,11 @@ def get_close(df: pd.DataFrame) -> float | None:
 
 
 def get_change_pct(df: pd.DataFrame) -> float | None:
-    """Return % change from previous close."""
     try:
         if len(df) < 2:
             return None
-        prev  = float(df["Close"].iloc[-2])
-        curr  = float(df["Close"].iloc[-1])
+        prev = float(df["Close"].iloc[-2])
+        curr = float(df["Close"].iloc[-1])
         return round((curr - prev) / prev * 100, 2)
     except Exception:
         return None
