@@ -122,21 +122,21 @@ def render_card(r: dict, mode: str = "BUY"):
     tv = f"https://in.tradingview.com/chart/?symbol=NSE:{sym}"
 
     if mode == "BUY":
-        c1 = cond_icon(conds.get("5m_ema5_gt_ema200", False))
-        c2 = cond_icon(conds.get("30m_close_gt_ema20", False))
-        c3 = cond_icon(conds.get("30m_close_gt_upper_bb", False))
-        c4 = cond_icon(conds.get("1h_close_gt_upper_bb", False))
-        c5 = cond_icon(conds.get("30m_macd_bullish", False))
-        c6 = cond_icon(conds.get("30m_atr_buy", False))
-        lbl1, lbl2, lbl3, lbl4 = "5m EMA5>200", "30m>EMA20", "30m>BBU", "1h>BBU"
+        c1 = cond_icon(conds.get("ema13_gt_ema50",        False))
+        c2 = cond_icon(conds.get("close_gt_ema13",        False))
+        c3 = cond_icon(conds.get("atr_stop_below",        False))
+        c4 = cond_icon(conds.get("macd_line_gt_signal",   False))
+        c5 = cond_icon(conds.get("macd_hist_positive",    False))
+        c6 = ""   # only 5 conditions now
+        lbl1, lbl2, lbl3, lbl4 = "EMA13>EMA50", "Close>EMA13", "ATR below", "MACD>"
     else:
-        c1 = cond_icon(conds.get("5m_ema5_lt_ema200", False))
-        c2 = cond_icon(conds.get("30m_close_lt_ema20", False))
-        c3 = cond_icon(conds.get("30m_close_lt_lower_bb", False))
-        c4 = cond_icon(conds.get("1h_close_lt_lower_bb", False))
-        c5 = cond_icon(conds.get("30m_macd_bearish", False))
-        c6 = cond_icon(conds.get("30m_atr_sell", False))
-        lbl1, lbl2, lbl3, lbl4 = "5m EMA5<200", "30m<EMA20", "30m<BBL", "1h<BBL"
+        c1 = cond_icon(conds.get("ema13_lt_ema50",        False))
+        c2 = cond_icon(conds.get("close_lt_ema13",        False))
+        c3 = cond_icon(conds.get("atr_stop_above",        False))
+        c4 = cond_icon(conds.get("macd_line_lt_signal",   False))
+        c5 = cond_icon(conds.get("macd_hist_negative",    False))
+        c6 = ""
+        lbl1, lbl2, lbl3, lbl4 = "EMA13<EMA50", "Close<EMA13", "ATR above", "MACD<"
 
     trade_html = ""
     if sig in ("STRONG BUY", "BUY", "STRONG SELL", "SELL"):
@@ -178,8 +178,7 @@ def render_card(r: dict, mode: str = "BUY"):
     <span>{c2} {lbl2}</span>
     <span>{c3} {lbl3}</span>
     <span>{c4} {lbl4}</span>
-    <span>{c5} MACD</span>
-    <span>{c6} ATR</span>
+    <span>{c5} Histogram</span>
   </div>
   {trade_html}
 </div>"""
@@ -205,9 +204,9 @@ def render_market_pulse(pulse: dict):
 
     ci = lambda v: cond_icon(v)
     checks_html = (
-        f'{ci(nifty.get("above_ema20",False))} EMA20 &nbsp;'
-        f'{ci(nifty.get("macd_bull",False))} MACD &nbsp;'
-        f'{ci(nifty.get("atr_bull",False))} ATR'
+        f'{ci(nifty.get("ema_cross_bull", False))} EMA13>50 &nbsp;'
+        f'{ci(nifty.get("atr_bull",       False))} ATR &nbsp;'
+        f'{ci(nifty.get("macd_bull",      False))} MACD'
     )
 
     html = f"""
@@ -217,7 +216,7 @@ def render_market_pulse(pulse: dict):
               flex-wrap:wrap;gap:10px">
     <div>
       <div style="font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:1px">
-        MARKET TREND</div>
+        MARKET TREND (Nifty 5-min)</div>
       <div style="font-size:24px;font-weight:900;color:{dc}">{overall}</div>
       <div style="font-size:11px;margin-top:4px">{checks_html}</div>
     </div>
@@ -232,12 +231,13 @@ def render_market_pulse(pulse: dict):
            <div style="font-size:10px;color:#94a3b8">A/D Ratio</div></div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:11px;color:#94a3b8">Nifty 50</div>
+      <div style="font-size:11px;color:#94a3b8">Nifty 50 (5-min)</div>
       <div style="font-size:20px;font-weight:700;color:#fff">
         {fmt_price(nifty.get("close"))}</div>
       <div style="font-size:11px;color:#94a3b8">
-        EMA20: {fmt_price(nifty.get("ema20"))} &nbsp;|&nbsp;
-        MACD: {nifty.get("macd","—")}</div>
+        EMA13: {fmt_price(nifty.get("ema13"))} &nbsp;|&nbsp;
+        EMA50: {fmt_price(nifty.get("ema50"))} &nbsp;|&nbsp;
+        MACD: {nifty.get("macd","-")}</div>
     </div>
   </div>
   <div style="margin-top:10px">
@@ -333,15 +333,20 @@ def main():
         overall = pulse.get("overall", "SIDEWAYS")
         st.session_state["pulse"] = pulse
 
-        # Which scans to run
+        # Which scans to run — market trend GATES the scan
+        # BULLISH → BUY only | BEARISH → SELL only | SIDEWAYS → both
         if scan_mode == "Auto (follow market)":
-            run_buy  = overall in ("BULLISH", "SIDEWAYS")
-            run_sell = overall in ("BEARISH", "SIDEWAYS")
+            if overall == "BULLISH":
+                run_buy, run_sell = True, False
+            elif overall == "BEARISH":
+                run_buy, run_sell = False, True
+            else:  # SIDEWAYS — run both
+                run_buy, run_sell = True, True
         elif scan_mode == "BUY only":
             run_buy, run_sell = True, False
         elif scan_mode == "SELL only":
             run_buy, run_sell = False, True
-        else:  # Both
+        else:  # Both BUY + SELL
             run_buy, run_sell = True, True
 
         buy_results  = []
