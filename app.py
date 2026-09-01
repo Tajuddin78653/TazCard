@@ -367,6 +367,16 @@ def main():
         st.session_state["scan_time"]    = now_ist.strftime("%H:%M:%S IST")
         st.session_state["scan_mode"]    = scan_mode
 
+        # Count only actionable signals (not WATCH/SKIP)
+        n_buy  = len([r for r in buy_results  if r.get("signal") in ("BUY", "STRONG BUY")])
+        n_sell = len([r for r in sell_results if r.get("signal") in ("SELL", "STRONG SELL")])
+        n_watch = len([r for r in buy_results + sell_results if r.get("signal") == "WATCH"])
+        st.success(
+            f"✅ Scan done — {n_buy} BUY  |  {n_sell} SELL  |  {n_watch} WATCH  "
+            f"· {now_ist.strftime('%H:%M:%S IST')}"
+        )
+        st.rerun()
+
     # ── Display ───────────────────────────────────────────────────────────────
     if "pulse" not in st.session_state:
         st.markdown(
