@@ -1,0 +1,6 @@
+streamlit>=1.28.0
+yfinance>=0.2.40
+pandas>=2.0.0
+pandas-ta>=0.3.14b
+numpy==1.26.4
+tzdata>=2024.1
