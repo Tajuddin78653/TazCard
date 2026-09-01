@@ -1,14 +1,10 @@
 """
 TazCard — NSE F&O Stock Scanner
 ================================
-BUY + SELL signals with market trend, Advance/Decline ratio,
-EMA + Bollinger Band + MACD + ATR Trailing Stop conditions.
-
-Built for Tajuddin's trading setup — matches exact Chartink scanner conditions.
+Single-page layout: Market Pulse + BUY + SELL + Watch all on one screen.
+No tabs, no sidebar — everything visible at once.
 """
 
-import os
-import time
 import logging
 import concurrent.futures
 from datetime import datetime
@@ -34,14 +30,29 @@ st.set_page_config(
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""<style>
+/* Hide sidebar toggle completely */
+[data-testid="collapsedControl"] { display: none !important; }
 [data-testid="stAppViewContainer"] { background: #0a0f1e; }
-[data-testid="stSidebar"] { background: #0d1220; }
+[data-testid="stSidebar"] { display: none !important; }
 * { color: #e2e8f0; }
 h1, h2, h3 { color: #f0b429 !important; }
-.stTabs [data-baseweb="tab"] { background: #111827; border: 1px solid #1e2d5a; border-radius: 8px; margin-right: 6px; color: #94a3b8; }
-.stTabs [aria-selected="true"] { background: #1e3a5f; color: #f0b429 !important; border-color: #f0b429; }
-.stButton > button { background: linear-gradient(135deg,#1d4ed8,#7c3aed) !important; color: #fff !important; font-weight: 700 !important; border: none !important; border-radius: 8px !important; }
-[data-testid="stMetric"] { background: #111827; border: 1px solid #1e2d5a; border-radius: 10px; padding: 12px; }
+.stButton > button {
+    background: linear-gradient(135deg,#1d4ed8,#7c3aed) !important;
+    color: #fff !important; font-weight: 700 !important;
+    border: none !important; border-radius: 8px !important;
+}
+[data-testid="stMetric"] {
+    background: #111827; border: 1px solid #1e2d5a;
+    border-radius: 10px; padding: 12px;
+}
+.section-header {
+    font-size: 15px; font-weight: 800; letter-spacing: 1px;
+    padding: 6px 14px; border-radius: 6px; margin-bottom: 10px;
+    display: inline-block;
+}
+.buy-header  { background: #052e16; color: #34d399; border: 1px solid #34d39944; }
+.sell-header { background: #450a0a; color: #f87171; border: 1px solid #f8717144; }
+.watch-header{ background: #451a03; color: #fbbf24; border: 1px solid #fbbf2444; }
 </style>""", unsafe_allow_html=True)
 
 
@@ -52,7 +63,7 @@ def is_market_open() -> bool:
         return False
     t = now.time()
     return (
-        now.replace(hour=9, minute=15, second=0, microsecond=0).time()
+        now.replace(hour=9,  minute=15, second=0, microsecond=0).time()
         <= t <=
         now.replace(hour=15, minute=30, second=0, microsecond=0).time()
     )
@@ -92,16 +103,13 @@ def cond_icon(v: bool) -> str:
 
 
 def score_color(score: int) -> str:
-    if score >= 90:
-        return "#34d399"
-    if score >= 70:
-        return "#86efac"
-    if score >= 50:
-        return "#fbbf24"
+    if score >= 90: return "#34d399"
+    if score >= 70: return "#86efac"
+    if score >= 50: return "#fbbf24"
     return "#f87171"
 
 
-# ── Signal card renderer ──────────────────────────────────────────────────────
+# ── Compact signal card ───────────────────────────────────────────────────────
 def render_card(r: dict, mode: str = "BUY"):
     sig   = r.get("signal", "SKIP")
     score = r.get("score", 0)
@@ -109,70 +117,70 @@ def render_card(r: dict, mode: str = "BUY"):
     close = r.get("close")
     chg   = r.get("change_pct")
     conds = r.get("conditions", {})
-    inds  = r.get("indicators", {})
 
     sc = score_color(score)
     tv = f"https://in.tradingview.com/chart/?symbol=NSE:{sym}"
 
-    # Condition rows
     if mode == "BUY":
-        cond_html = (
-            f"<div style='font-size:11px;margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:2px'>"
-            f"<span>{cond_icon(conds.get('5m_ema5_gt_ema200',False))} 5m EMA5>EMA200</span>"
-            f"<span>{cond_icon(conds.get('30m_close_gt_ema20',False))} 30m &gt; EMA20</span>"
-            f"<span>{cond_icon(conds.get('30m_close_gt_upper_bb',False))} 30m &gt; Upper BB</span>"
-            f"<span>{cond_icon(conds.get('1h_close_gt_upper_bb',False))} 1h &gt; Upper BB</span>"
-            f"<span>{cond_icon(conds.get('30m_macd_bullish',False))} MACD Bullish</span>"
-            f"<span>{cond_icon(conds.get('30m_atr_buy',False))} ATR Buy Signal</span>"
-            f"</div>"
-        )
+        c1 = cond_icon(conds.get("5m_ema5_gt_ema200", False))
+        c2 = cond_icon(conds.get("30m_close_gt_ema20", False))
+        c3 = cond_icon(conds.get("30m_close_gt_upper_bb", False))
+        c4 = cond_icon(conds.get("1h_close_gt_upper_bb", False))
+        c5 = cond_icon(conds.get("30m_macd_bullish", False))
+        c6 = cond_icon(conds.get("30m_atr_buy", False))
+        lbl1, lbl2, lbl3, lbl4 = "5m EMA5>200", "30m>EMA20", "30m>BBU", "1h>BBU"
     else:
-        cond_html = (
-            f"<div style='font-size:11px;margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:2px'>"
-            f"<span>{cond_icon(conds.get('5m_ema5_lt_ema200',False))} 5m EMA5&lt;EMA200</span>"
-            f"<span>{cond_icon(conds.get('30m_close_lt_ema20',False))} 30m &lt; EMA20</span>"
-            f"<span>{cond_icon(conds.get('30m_close_lt_lower_bb',False))} 30m &lt; Lower BB</span>"
-            f"<span>{cond_icon(conds.get('1h_close_lt_lower_bb',False))} 1h &lt; Lower BB</span>"
-            f"<span>{cond_icon(conds.get('30m_macd_bearish',False))} MACD Bearish</span>"
-            f"<span>{cond_icon(conds.get('30m_atr_sell',False))} ATR Sell Signal</span>"
-            f"</div>"
-        )
+        c1 = cond_icon(conds.get("5m_ema5_lt_ema200", False))
+        c2 = cond_icon(conds.get("30m_close_lt_ema20", False))
+        c3 = cond_icon(conds.get("30m_close_lt_lower_bb", False))
+        c4 = cond_icon(conds.get("1h_close_lt_lower_bb", False))
+        c5 = cond_icon(conds.get("30m_macd_bearish", False))
+        c6 = cond_icon(conds.get("30m_atr_sell", False))
+        lbl1, lbl2, lbl3, lbl4 = "5m EMA5<200", "30m<EMA20", "30m<BBL", "1h<BBL"
 
-    # Entry/SL/Target
     trade_html = ""
     if sig in ("STRONG BUY", "BUY", "STRONG SELL", "SELL"):
-        sl_label = "SL" if mode == "BUY" else "SL (above)"
+        sl_lbl = "SL" if mode == "BUY" else "SL↑"
         trade_html = (
-            f"<div style='margin-top:10px;padding:8px;background:#0d1220;border-radius:6px;font-size:11px'>"
-            f"<span style='color:#94a3b8'>Entry: </span><span style='color:#fff;font-weight:700'>{fmt_price(r.get('entry'))}</span>&nbsp;&nbsp;"
-            f"<span style='color:#f87171'>{sl_label}: {fmt_price(r.get('sl'))}</span>&nbsp;&nbsp;"
-            f"<span style='color:#34d399'>T1: {fmt_price(r.get('target1'))}</span>&nbsp;&nbsp;"
-            f"<span style='color:#4ade80'>T2: {fmt_price(r.get('target2'))}</span>"
+            f"<div style='margin-top:8px;padding:6px 10px;background:#0d1220;"
+            f"border-radius:6px;font-size:11px;display:flex;gap:16px;flex-wrap:wrap'>"
+            f"<span><span style='color:#94a3b8'>Entry </span>"
+            f"<b style='color:#fff'>{fmt_price(r.get('entry'))}</b></span>"
+            f"<span><span style='color:#f87171'>{sl_lbl} {fmt_price(r.get('sl'))}</span></span>"
+            f"<span><span style='color:#34d399'>T1 {fmt_price(r.get('target1'))}</span></span>"
+            f"<span><span style='color:#4ade80'>T2 {fmt_price(r.get('target2'))}</span></span>"
             f"</div>"
         )
 
     html = f"""
-<div style="background:#111827;border:1px solid #1e2d5a;border-radius:12px;padding:16px;margin-bottom:10px">
-  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-    <div>
-      <span style="font-size:18px;font-weight:800;color:#f3f4f6">{sym}</span>
-      <span style="font-size:11px;color:#6b7280;margin-left:6px">NSE F&amp;O</span>
-    </div>
+<div style="background:#111827;border:1px solid #1e2d5a;border-radius:10px;
+            padding:12px 14px;margin-bottom:8px">
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              flex-wrap:wrap;gap:6px">
     <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:16px;font-weight:700;color:#f3f4f6">{fmt_price(close)}</span>
+      <span style="font-size:16px;font-weight:800;color:#f3f4f6">{sym}</span>
+      <span style="font-size:14px;font-weight:700;color:#e2e8f0">{fmt_price(close)}</span>
       {fmt_pct(chg)}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:14px;font-weight:800;color:{sc}">{score}/100</span>
+      <div style="width:60px;height:5px;background:#1f2937;border-radius:3px;overflow:hidden">
+        <div style="width:{score}%;height:100%;background:{sc};border-radius:3px"></div>
+      </div>
       {signal_badge(sig)}
+      <a href="{tv}" target="_blank"
+         style="font-size:11px;color:#60a5fa;text-decoration:none">📈</a>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-    <span style="font-size:11px;color:#94a3b8">Score:</span>
-    <span style="font-size:16px;font-weight:800;color:{sc}">{score}/100</span>
-    <div style="flex:1;height:6px;background:#1f2937;border-radius:3px;overflow:hidden;margin-left:4px">
-      <div style="width:{score}%;height:100%;background:{sc};border-radius:3px"></div>
-    </div>
-    <a href="{tv}" target="_blank" style="font-size:10px;color:#60a5fa;text-decoration:none;margin-left:8px">📈 Chart</a>
+  <div style="font-size:11px;margin-top:6px;display:flex;flex-wrap:wrap;gap:10px;
+              color:#94a3b8">
+    <span>{c1} {lbl1}</span>
+    <span>{c2} {lbl2}</span>
+    <span>{c3} {lbl3}</span>
+    <span>{c4} {lbl4}</span>
+    <span>{c5} MACD</span>
+    <span>{c6} ATR</span>
   </div>
-  {cond_html}
   {trade_html}
 </div>"""
     st.markdown(html, unsafe_allow_html=True)
@@ -180,93 +188,91 @@ def render_card(r: dict, mode: str = "BUY"):
 
 # ── Market Pulse Banner ───────────────────────────────────────────────────────
 def render_market_pulse(pulse: dict):
-    overall  = pulse.get("overall", "SIDEWAYS")
-    nifty    = pulse.get("nifty", {})
-    ad       = pulse.get("ad", {})
+    overall = pulse.get("overall", "SIDEWAYS")
+    nifty   = pulse.get("nifty", {})
+    ad      = pulse.get("ad", {})
 
-    direction_color = {"BULLISH": "#34d399", "BEARISH": "#f87171", "SIDEWAYS": "#fbbf24"}
-    direction_bg    = {"BULLISH": "#052e16", "BEARISH": "#450a0a", "SIDEWAYS": "#451a03"}
-    dc = direction_color.get(overall, "#fbbf24")
-    db = direction_bg.get(overall, "#451a03")
+    dc = {"BULLISH": "#34d399", "BEARISH": "#f87171", "SIDEWAYS": "#fbbf24"}.get(overall, "#fbbf24")
+    db = {"BULLISH": "#052e16", "BEARISH": "#450a0a", "SIDEWAYS": "#451a03"}.get(overall, "#451a03")
 
-    adv  = ad.get("advancing", "—")
-    dec  = ad.get("declining", "—")
-    unch = ad.get("unchanged", "—")
+    adv   = ad.get("advancing", 0) or 0
+    dec   = ad.get("declining", 0) or 0
+    unch  = ad.get("unchanged", 0) or 0
     ratio = ad.get("ratio", "—")
-    total = ad.get("total", 0)
-    adv_pct = round(adv / total * 100) if total > 0 else 0
-    dec_pct = round(dec / total * 100) if total > 0 else 0
+    total = ad.get("total", 0) or 1
+    adv_pct = round(adv / total * 100)
+    dec_pct = round(dec / total * 100)
 
-    nifty_close = nifty.get("close", "—")
-    ema20       = nifty.get("ema20", "—")
-    macd_val    = nifty.get("macd", "—")
-
-    bull_count  = nifty.get("bull_count", 0)
-    checks = [
-        ("30m Close > EMA 20", nifty.get("above_ema20", False)),
-        ("30m MACD Bullish",   nifty.get("macd_bull",   False)),
-        ("30m ATR Buy Signal", nifty.get("atr_bull",    False)),
-    ]
-    checks_html = "".join(
-        f'<span style="font-size:11px;margin-right:12px">{cond_icon(v)} {label}</span>'
-        for label, v in checks
+    ci = lambda v: cond_icon(v)
+    checks_html = (
+        f'{ci(nifty.get("above_ema20",False))} EMA20 &nbsp;'
+        f'{ci(nifty.get("macd_bull",False))} MACD &nbsp;'
+        f'{ci(nifty.get("atr_bull",False))} ATR'
     )
 
     html = f"""
-<div style="background:{db};border:2px solid {dc};border-radius:12px;padding:16px;margin-bottom:20px">
-  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+<div style="background:{db};border:2px solid {dc};border-radius:12px;
+            padding:14px 18px;margin-bottom:16px">
+  <div style="display:flex;align-items:center;justify-content:space-between;
+              flex-wrap:wrap;gap:10px">
     <div>
-      <span style="font-size:13px;color:#94a3b8;font-weight:600">MARKET TREND</span>
-      <div style="font-size:22px;font-weight:900;color:{dc};margin-top:2px">{overall}</div>
-      <div style="margin-top:6px">{checks_html}</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:1px">
+        MARKET TREND</div>
+      <div style="font-size:24px;font-weight:900;color:{dc}">{overall}</div>
+      <div style="font-size:11px;margin-top:4px">{checks_html}</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;text-align:center">
-      <div><div style="font-size:20px;font-weight:800;color:#34d399">{adv}</div><div style="font-size:10px;color:#94a3b8">Advancing</div></div>
-      <div><div style="font-size:20px;font-weight:800;color:#f87171">{dec}</div><div style="font-size:10px;color:#94a3b8">Declining</div></div>
-      <div><div style="font-size:20px;font-weight:800;color:#fbbf24">{unch}</div><div style="font-size:10px;color:#94a3b8">Unchanged</div></div>
-      <div><div style="font-size:20px;font-weight:800;color:#60a5fa">{ratio}</div><div style="font-size:10px;color:#94a3b8">A/D Ratio</div></div>
+    <div style="display:flex;gap:20px;text-align:center">
+      <div><div style="font-size:18px;font-weight:800;color:#34d399">{adv}</div>
+           <div style="font-size:10px;color:#94a3b8">Advancing</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:#f87171">{dec}</div>
+           <div style="font-size:10px;color:#94a3b8">Declining</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:#fbbf24">{unch}</div>
+           <div style="font-size:10px;color:#94a3b8">Unchanged</div></div>
+      <div><div style="font-size:18px;font-weight:800;color:#60a5fa">{ratio}</div>
+           <div style="font-size:10px;color:#94a3b8">A/D Ratio</div></div>
     </div>
     <div style="text-align:right">
       <div style="font-size:11px;color:#94a3b8">Nifty 50</div>
-      <div style="font-size:18px;font-weight:700;color:#fff">{fmt_price(nifty_close)}</div>
-      <div style="font-size:11px;color:#94a3b8">EMA20: {fmt_price(ema20)} | MACD: {macd_val}</div>
+      <div style="font-size:20px;font-weight:700;color:#fff">
+        {fmt_price(nifty.get("close"))}</div>
+      <div style="font-size:11px;color:#94a3b8">
+        EMA20: {fmt_price(nifty.get("ema20"))} &nbsp;|&nbsp;
+        MACD: {nifty.get("macd","—")}</div>
     </div>
   </div>
   <div style="margin-top:10px">
-    <div style="display:flex;gap:4px;height:8px;border-radius:4px;overflow:hidden">
+    <div style="display:flex;gap:3px;height:6px;border-radius:3px;overflow:hidden">
       <div style="width:{adv_pct}%;background:#34d399"></div>
       <div style="width:{dec_pct}%;background:#f87171"></div>
-      <div style="width:{max(0,100-adv_pct-dec_pct)}%;background:#fbbf24"></div>
+      <div style="width:{max(0,100-adv_pct-dec_pct)}%;background:#64748b"></div>
     </div>
-    <div style="display:flex;gap:16px;margin-top:4px;font-size:10px;color:#64748b">
-      <span>■ Advancing {adv_pct}%</span>
-      <span>■ Declining {dec_pct}%</span>
-      <span>■ Unchanged</span>
+    <div style="display:flex;gap:14px;margin-top:3px;font-size:10px;color:#64748b">
+      <span>■ Adv {adv_pct}%</span>
+      <span>■ Dec {dec_pct}%</span>
+      <span>■ Unch</span>
     </div>
   </div>
 </div>"""
     st.markdown(html, unsafe_allow_html=True)
 
 
-# ── Run scan (parallel) ───────────────────────────────────────────────────────
+# ── Parallel scanner ──────────────────────────────────────────────────────────
 def run_scan(symbols: list, mode: str, progress_bar) -> list:
     scanner = scan_buy if mode == "BUY" else scan_sell
     results = []
     total   = len(symbols)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(scanner, sym): sym for sym in symbols}
         done    = 0
         for future in concurrent.futures.as_completed(futures):
             done += 1
-            progress_bar.progress(done / total, text=f"Scanning {done}/{total} stocks...")
+            progress_bar.progress(done / total, text=f"Scanning {done}/{total}...")
             try:
                 r = future.result()
-                # Include everything that is not SKIP and not an error-only result
                 if r.get("signal") not in ("SKIP", None):
                     results.append(r)
                 elif r.get("score", 0) >= 20:
-                    # Include partial matches (at least 1 condition passed)
                     results.append(r)
             except Exception:
                 pass
@@ -276,73 +282,58 @@ def run_scan(symbols: list, mode: str, progress_bar) -> list:
 
 # ── Main App ──────────────────────────────────────────────────────────────────
 def main():
-    now_ist = datetime.now(IST)
+    now_ist     = datetime.now(IST)
     market_open = is_market_open()
 
-    # Header
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown("# 🃏 TazCard — NSE F&O Scanner")
-        st.caption("BUY & SELL signals · EMA + Bollinger Band + MACD + ATR · Market Trend & A/D Ratio")
-    with col2:
+    # ── Top header row ────────────────────────────────────────────────────────
+    h1, h2, h3 = st.columns([3, 2, 2])
+    with h1:
+        st.markdown("## 🃏 TazCard — NSE F&O Scanner")
+        st.caption("EMA · Bollinger Bands · MACD · ATR · Market Trend")
+    with h2:
         status_color = "#34d399" if market_open else "#ef4444"
         status_label = "🟢 Market Open" if market_open else "🔴 Market Closed"
         st.markdown(
-            f'<div style="text-align:right;padding-top:20px">'
+            f'<div style="padding-top:18px;text-align:center">'
             f'<span style="background:rgba(0,0,0,0.3);color:{status_color};'
-            f'border:1px solid {status_color}44;border-radius:20px;padding:6px 14px;'
+            f'border:1px solid {status_color}44;border-radius:20px;padding:5px 14px;'
             f'font-size:13px;font-weight:600">{status_label}</span><br>'
-            f'<span style="font-size:11px;color:#64748b">{now_ist.strftime("%d %b %Y %H:%M IST")}</span>'
+            f'<span style="font-size:11px;color:#64748b">'
+            f'{now_ist.strftime("%d %b %Y %H:%M IST")}</span>'
             f'</div>', unsafe_allow_html=True
         )
-
-    st.divider()
-
-    # Sidebar controls
-    with st.sidebar:
-        st.markdown("### ⚙️ Scanner Controls")
-        st.caption("Configure and run your scan")
-        st.divider()
-
-        scan_mode = st.radio(
-            "Scan Mode",
-            ["Auto (follow market)", "BUY only", "SELL only", "Both"],
-            index=0,
+    with h3:
+        # Inline controls — no sidebar needed
+        scan_mode = st.selectbox(
+            "Mode",
+            ["Both BUY + SELL", "BUY only", "SELL only", "Auto (follow market)"],
+            index=0, label_visibility="collapsed",
         )
 
-        max_stocks = st.slider("Stocks to scan", 20, 180, 60, 10,
-                               help="More stocks = slower but more comprehensive")
+    # ── Controls row ──────────────────────────────────────────────────────────
+    cc1, cc2, cc3 = st.columns([2, 2, 2])
+    with cc1:
+        max_stocks = st.slider("Stocks to scan", 20, 180, 60, 10)
+    with cc2:
+        min_score = st.slider("Min score", 0, 100, 0, 5)
+    with cc3:
+        st.markdown("<div style='padding-top:26px'>", unsafe_allow_html=True)
+        run_clicked = st.button("🚀 Run Scanner", use_container_width=True, type="primary")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        min_score = st.slider("Minimum score to show", 0, 100, 0, 5)
-
-        st.divider()
-        st.markdown("**Conditions used:**")
-        st.markdown("- 5m EMA(5) vs EMA(200)")
-        st.markdown("- 30m Close vs EMA(20)")
-        st.markdown("- 30m Close vs Upper/Lower BB(20,2)")
-        st.markdown("- 2h Close vs Upper/Lower BB(20,2)")
-        st.markdown("- 30m MACD (12,26,9)")
-        st.markdown("- 30m ATR Trailing Stop")
-
-        st.divider()
-        st.caption("⚠️ Data: yfinance (~15-min delayed). For reference only. Not financial advice.")
-
-    # Run button
-    run_clicked = st.button("🚀 Run Scanner", use_container_width=True, type="primary")
+    st.divider()
 
     # ── Execute scan ──────────────────────────────────────────────────────────
     if run_clicked:
         symbols_all = get_fno_symbols()[:max_stocks]
-
         ph = st.empty()
 
-        # Step 1: Market pulse
         ph.info("📡 Checking market trend & A/D ratio...")
-        pulse = get_market_pulse()
+        pulse   = get_market_pulse()
         overall = pulse.get("overall", "SIDEWAYS")
         st.session_state["pulse"] = pulse
 
-        # Step 2: Determine which scans to run
+        # Which scans to run
         if scan_mode == "Auto (follow market)":
             run_buy  = overall in ("BULLISH", "SIDEWAYS")
             run_sell = overall in ("BEARISH", "SIDEWAYS")
@@ -350,23 +341,21 @@ def main():
             run_buy, run_sell = True, False
         elif scan_mode == "SELL only":
             run_buy, run_sell = False, True
-        else:
+        else:  # Both
             run_buy, run_sell = True, True
 
         buy_results  = []
         sell_results = []
 
-        # Step 3: Run BUY scan
         if run_buy:
-            ph.info(f"🟢 Running BUY scanner on {len(symbols_all)} stocks...")
+            ph.info(f"🟢 BUY scan — {len(symbols_all)} stocks...")
             prog = st.progress(0)
-            buy_results = run_scan(symbols_all, "BUY", prog)
-            buy_results = [r for r in buy_results if r.get("score", 0) >= min_score]
+            buy_results  = run_scan(symbols_all, "BUY", prog)
+            buy_results  = [r for r in buy_results  if r.get("score", 0) >= min_score]
             prog.empty()
 
-        # Step 4: Run SELL scan
         if run_sell:
-            ph.info(f"🔴 Running SELL scanner on {len(symbols_all)} stocks...")
+            ph.info(f"🔴 SELL scan — {len(symbols_all)} stocks...")
             prog2 = st.progress(0)
             sell_results = run_scan(symbols_all, "SELL", prog2)
             sell_results = [r for r in sell_results if r.get("score", 0) >= min_score]
@@ -377,66 +366,97 @@ def main():
         st.session_state["sell_results"] = sell_results
         st.session_state["scan_time"]    = now_ist.strftime("%H:%M:%S IST")
         st.session_state["scan_mode"]    = scan_mode
-        st.success(f"✅ Scan complete — {len(buy_results)} BUY + {len(sell_results)} SELL signals found · {now_ist.strftime('%H:%M:%S IST')}")
 
-    # ── Display results ───────────────────────────────────────────────────────
+    # ── Display ───────────────────────────────────────────────────────────────
     if "pulse" not in st.session_state:
         st.markdown(
             '<div style="background:#111827;border:2px dashed #1e2d5a;border-radius:14px;'
             'padding:80px 24px;text-align:center">'
             '<div style="font-size:56px">🃏</div>'
-            '<div style="font-size:22px;font-weight:800;color:#f3f4f6;margin:16px 0 10px">TazCard Ready</div>'
-            '<div style="font-size:14px;color:#6b7280">Click "Run Scanner" to scan F&O stocks</div>'
+            '<div style="font-size:22px;font-weight:800;color:#f3f4f6;margin:16px 0 8px">'
+            'TazCard Ready</div>'
+            '<div style="font-size:14px;color:#6b7280">'
+            'Set your options above and click Run Scanner</div>'
             '</div>', unsafe_allow_html=True
         )
         return
 
-    # Market pulse
+    # Market pulse banner (full width)
     render_market_pulse(st.session_state["pulse"])
 
-    # Summary metrics
     buy_r  = st.session_state.get("buy_results",  [])
     sell_r = st.session_state.get("sell_results", [])
-    strong_buy  = [r for r in buy_r  if r["signal"] == "STRONG BUY"]
-    strong_sell = [r for r in sell_r if r["signal"] == "STRONG SELL"]
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("🟢 BUY Signals",    len([r for r in buy_r  if r["signal"] in ("BUY","STRONG BUY")]))
-    m2.metric("⭐ Strong BUY",     len(strong_buy))
-    m3.metric("🔴 SELL Signals",   len([r for r in sell_r if r["signal"] in ("SELL","STRONG SELL")]))
-    m4.metric("⭐ Strong SELL",    len(strong_sell))
+    buy_signals  = [r for r in buy_r  if r["signal"] in ("STRONG BUY",  "BUY")]
+    sell_signals = [r for r in sell_r if r["signal"] in ("STRONG SELL", "SELL")]
+    watch_list   = [r for r in buy_r + sell_r if r["signal"] == "WATCH"]
+
+    # Summary metrics row
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("🟢 BUY",        len(buy_signals))
+    m2.metric("⭐ Strong BUY", len([r for r in buy_signals  if r["signal"] == "STRONG BUY"]))
+    m3.metric("🔴 SELL",       len(sell_signals))
+    m4.metric("⭐ Strong SELL",len([r for r in sell_signals if r["signal"] == "STRONG SELL"]))
+    m5.metric("👀 Watch",      len(watch_list))
 
     if st.session_state.get("scan_time"):
-        st.caption(f"Last scan: {st.session_state['scan_time']} · Mode: {st.session_state.get('scan_mode','')}")
+        st.caption(
+            f"Last scan: {st.session_state['scan_time']} · "
+            f"Mode: {st.session_state.get('scan_mode','')} · "
+            f"⚠️ Data ~15min delayed. Not financial advice."
+        )
 
-    # Tabs
-    tabs = st.tabs(["🟢 BUY Signals", "🔴 SELL Signals", "👀 Watch List"])
+    st.divider()
 
-    with tabs[0]:
-        buy_show = [r for r in buy_r if r["signal"] in ("STRONG BUY", "BUY")]
-        if not buy_show:
-            st.info("No BUY signals found in this scan. Market may be bearish — check SELL tab.")
+    # ── THREE COLUMNS — all on one page ──────────────────────────────────────
+    col_buy, col_sell, col_watch = st.columns(3)
+
+    with col_buy:
+        st.markdown(
+            f'<div class="section-header buy-header">'
+            f'🟢 BUY Signals ({len(buy_signals)})</div>',
+            unsafe_allow_html=True
+        )
+        if not buy_signals:
+            st.markdown(
+                '<div style="background:#111827;border:1px solid #1e2d5a;border-radius:8px;'
+                'padding:20px;text-align:center;color:#6b7280;font-size:13px">'
+                'No BUY signals</div>', unsafe_allow_html=True
+            )
         else:
-            st.markdown(f"**{len(buy_show)} BUY signals** (sorted by score)")
-            for r in buy_show:
+            for r in buy_signals:
                 render_card(r, "BUY")
 
-    with tabs[1]:
-        sell_show = [r for r in sell_r if r["signal"] in ("STRONG SELL", "SELL")]
-        if not sell_show:
-            st.info("No SELL signals found in this scan. Market may be bullish — check BUY tab.")
+    with col_sell:
+        st.markdown(
+            f'<div class="section-header sell-header">'
+            f'🔴 SELL Signals ({len(sell_signals)})</div>',
+            unsafe_allow_html=True
+        )
+        if not sell_signals:
+            st.markdown(
+                '<div style="background:#111827;border:1px solid #1e2d5a;border-radius:8px;'
+                'padding:20px;text-align:center;color:#6b7280;font-size:13px">'
+                'No SELL signals</div>', unsafe_allow_html=True
+            )
         else:
-            st.markdown(f"**{len(sell_show)} SELL signals** (sorted by score)")
-            for r in sell_show:
+            for r in sell_signals:
                 render_card(r, "SELL")
 
-    with tabs[2]:
-        watch = [r for r in buy_r + sell_r if r["signal"] == "WATCH"]
-        if not watch:
-            st.info("No stocks in watch zone (score 50–69). Rerun scan or lower minimum score.")
+    with col_watch:
+        st.markdown(
+            f'<div class="section-header watch-header">'
+            f'👀 Watch List ({len(watch_list)})</div>',
+            unsafe_allow_html=True
+        )
+        if not watch_list:
+            st.markdown(
+                '<div style="background:#111827;border:1px solid #1e2d5a;border-radius:8px;'
+                'padding:20px;text-align:center;color:#6b7280;font-size:13px">'
+                'No stocks in watch zone</div>', unsafe_allow_html=True
+            )
         else:
-            st.markdown(f"**{len(watch)} stocks to watch** — partially meeting conditions")
-            for r in watch:
+            for r in watch_list:
                 mode = "BUY" if r in buy_r else "SELL"
                 render_card(r, mode)
 
