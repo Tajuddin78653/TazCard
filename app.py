@@ -262,7 +262,11 @@ def run_scan(symbols: list, mode: str, progress_bar) -> list:
             progress_bar.progress(done / total, text=f"Scanning {done}/{total} stocks...")
             try:
                 r = future.result()
-                if r.get("signal") not in ("SKIP", None) or r.get("score", 0) >= 50:
+                # Include everything that is not SKIP and not an error-only result
+                if r.get("signal") not in ("SKIP", None):
+                    results.append(r)
+                elif r.get("score", 0) >= 20:
+                    # Include partial matches (at least 1 condition passed)
                     results.append(r)
             except Exception:
                 pass
@@ -309,7 +313,7 @@ def main():
         max_stocks = st.slider("Stocks to scan", 20, 180, 60, 10,
                                help="More stocks = slower but more comprehensive")
 
-        min_score = st.slider("Minimum score to show", 0, 100, 50, 5)
+        min_score = st.slider("Minimum score to show", 0, 100, 0, 5)
 
         st.divider()
         st.markdown("**Conditions used:**")
