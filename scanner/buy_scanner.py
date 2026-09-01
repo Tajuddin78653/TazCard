@@ -7,15 +7,25 @@ BUY Scanner — your exact Chartink conditions:
 
 All 4 must pass for a BUY signal.
 Score 0–100 based on conditions + ATR + MACD confirmation.
+
+Period notes:
+  - 5m  period="60d"  → yfinance max for 5m intraday; gives ~2250 bars (well above EMA200 need)
+  - 30m period="60d"  → gives ~480 bars; plenty for EMA20 + BB(20) + MACD
+  - 2h  period="730d" → gives ~650 bars; needed for BB(20) on 2h
 """
 
 import logging
 from scanner.indicators import (
-    fetch_ohlc, calc_ema, calc_bb, calc_macd,
+    fetch_ohlc, fetch_daily_change, calc_ema, calc_bb, calc_macd,
     calc_atr_trailing_stop, get_close, get_change_pct
 )
 
 logger = logging.getLogger(__name__)
+
+# yfinance period limits per interval
+PERIOD_5M  = "60d"   # max for 5m  (gives ~2250 bars — enough for EMA200)
+PERIOD_30M = "60d"   # max for 30m (gives ~480  bars — enough for EMA20+BB)
+PERIOD_2H  = "730d"  # 2h data (gives ~650 bars — enough for BB20)
 
 
 def scan_buy(symbol: str) -> dict:
@@ -41,13 +51,18 @@ def scan_buy(symbol: str) -> dict:
     ticker = f"{symbol}.NS"
 
     try:
-        # ── Fetch OHLC for 3 timeframes ────────────────────────────────────
-        df_5m   = fetch_ohlc(ticker, interval="5m",  period="5d")
-        df_30m  = fetch_ohlc(ticker, interval="30m", period="10d")
-        df_2h   = fetch_ohlc(ticker, interval="2h",  period="30d")
+        # ── Fetch OHLC for 3 timeframes ────────────────────────────────────────
+        # 5m needs min_bars=210 to compute EMA(200) reliably
+        df_5m  = fetch_ohlc(ticker, interval="5m",  period=PERIOD_5M,  min_bars=210)
+        df_30m = fetch_ohlc(ticker, interval="30m", period=PERIOD_30M, min_bars=35)
+        df_2h  = fetch_ohlc(ticker, interval="2h",  period=PERIOD_2H,  min_bars=25)
 
         if df_5m is None or df_30m is None or df_2h is None:
-            result["error"] = "Insufficient data"
+            missing = []
+            if df_5m  is None: missing.append("5m")
+            if df_30m is None: missing.append("30m")
+            if df_2h  is None: missing.append("2h")
+            result["error"] = f"Insufficient data ({', '.join(missing)})"
             return result
 
         close = get_close(df_5m)
@@ -56,66 +71,66 @@ def scan_buy(symbol: str) -> dict:
             return result
 
         result["close"]      = round(close, 2)
-        result["change_pct"] = get_change_pct(df_5m)
+        # Use daily change for accurate % move
+        result["change_pct"] = fetch_daily_change(ticker) or get_change_pct(df_5m)
 
-        # ── Condition 1: 5-min EMA(5) > EMA(200) ───────────────────────────
+        # ── Condition 1: 5-min EMA(5) > EMA(200) ───────────────────────────────
         ema5_5m   = calc_ema(df_5m, 5)
         ema200_5m = calc_ema(df_5m, 200)
         cond1 = bool(ema5_5m and ema200_5m and ema5_5m > ema200_5m)
-        result["conditions"]["5m_ema5_gt_ema200"]  = cond1
-        result["indicators"]["ema5_5m"]            = round(ema5_5m,   2) if ema5_5m   else None
-        result["indicators"]["ema200_5m"]          = round(ema200_5m, 2) if ema200_5m else None
+        result["conditions"]["5m_ema5_gt_ema200"] = cond1
+        result["indicators"]["ema5_5m"]           = round(ema5_5m,   2) if ema5_5m   else None
+        result["indicators"]["ema200_5m"]         = round(ema200_5m, 2) if ema200_5m else None
 
-        # ── Condition 2: 30-min Close > EMA(20) ────────────────────────────
+        # ── Condition 2: 30-min Close > EMA(20) ────────────────────────────────
         close_30m = get_close(df_30m)
         ema20_30m = calc_ema(df_30m, 20)
         cond2 = bool(close_30m and ema20_30m and close_30m > ema20_30m)
         result["conditions"]["30m_close_gt_ema20"] = cond2
         result["indicators"]["ema20_30m"]          = round(ema20_30m, 2) if ema20_30m else None
 
-        # ── Condition 3: 30-min Close > Upper BB(20,2) ─────────────────────
-        bb_30m  = calc_bb(df_30m, 20, 2.0)
-        cond3   = bool(close_30m and bb_30m and close_30m > bb_30m["upper"])
+        # ── Condition 3: 30-min Close > Upper BB(20,2) ─────────────────────────
+        bb_30m = calc_bb(df_30m, 20, 2.0)
+        cond3  = bool(close_30m and bb_30m and close_30m > bb_30m["upper"])
         result["conditions"]["30m_close_gt_upper_bb"] = cond3
         result["indicators"]["bb_upper_30m"] = round(bb_30m["upper"], 2) if bb_30m else None
         result["indicators"]["bb_lower_30m"] = round(bb_30m["lower"], 2) if bb_30m else None
 
-        # ── Condition 4: 2-hour Close > Upper BB(20,2) ─────────────────────
+        # ── Condition 4: 2-hour Close > Upper BB(20,2) ─────────────────────────
         close_2h = get_close(df_2h)
         bb_2h    = calc_bb(df_2h, 20, 2.0)
         cond4    = bool(close_2h and bb_2h and close_2h > bb_2h["upper"])
         result["conditions"]["2h_close_gt_upper_bb"] = cond4
         result["indicators"]["bb_upper_2h"] = round(bb_2h["upper"], 2) if bb_2h else None
 
-        # ── Bonus: MACD confirmation on 30-min ─────────────────────────────
-        macd_30m = calc_macd(df_30m)
+        # ── Bonus: MACD confirmation on 30-min ─────────────────────────────────
+        macd_30m  = calc_macd(df_30m)
         macd_bull = bool(
             macd_30m and
-            macd_30m["macd"] and macd_30m["signal"] and
             macd_30m["macd"] > macd_30m["signal"] and
-            macd_30m["histogram"] and macd_30m["histogram"] > 0
+            macd_30m["histogram"] > 0
         )
         result["conditions"]["30m_macd_bullish"] = macd_bull
-        result["indicators"]["macd_30m"]  = round(macd_30m["macd"], 2)      if macd_30m else None
-        result["indicators"]["macd_hist"] = round(macd_30m["histogram"], 2) if macd_30m else None
+        result["indicators"]["macd_30m"]  = round(macd_30m["macd"],      2) if macd_30m else None
+        result["indicators"]["macd_hist"] = round(macd_30m["histogram"],  2) if macd_30m else None
 
-        # ── Bonus: ATR Trailing Stop on 30-min ─────────────────────────────
+        # ── Bonus: ATR Trailing Stop on 30-min ─────────────────────────────────
         atr_30m  = calc_atr_trailing_stop(df_30m)
         atr_bull = bool(atr_30m and atr_30m["signal"] == "buy")
-        result["conditions"]["30m_atr_buy"] = atr_bull
+        result["conditions"]["30m_atr_buy"]  = atr_bull
         result["indicators"]["atr_stop_30m"] = atr_30m["atr_stop"] if atr_30m else None
 
-        # ── Score ───────────────────────────────────────────────────────────
+        # ── Score ───────────────────────────────────────────────────────────────
         score = 0
-        if cond1:      score += 20  # 5-min EMA trend
-        if cond2:      score += 20  # 30-min above EMA
-        if cond3:      score += 25  # 30-min BB breakout (most important)
-        if cond4:      score += 25  # 2-hour BB breakout (most important)
-        if macd_bull:  score += 5   # MACD bonus
-        if atr_bull:   score += 5   # ATR bonus
+        if cond1:      score += 20   # 5-min EMA trend
+        if cond2:      score += 20   # 30-min above EMA
+        if cond3:      score += 25   # 30-min BB breakout
+        if cond4:      score += 25   # 2-hour BB breakout
+        if macd_bull:  score +=  5   # MACD bonus
+        if atr_bull:   score +=  5   # ATR bonus
         result["score"] = score
 
-        # ── Signal label ────────────────────────────────────────────────────
+        # ── Signal label ────────────────────────────────────────────────────────
         all_4 = cond1 and cond2 and cond3 and cond4
         if all_4 and score >= 90:
             result["signal"] = "STRONG BUY"
@@ -123,10 +138,12 @@ def scan_buy(symbol: str) -> dict:
             result["signal"] = "BUY"
         elif score >= 60:
             result["signal"] = "WATCH"
+        elif score >= 40:
+            result["signal"] = "WATCH"   # show partial matches too
         else:
             result["signal"] = "SKIP"
 
-        # ── Entry / SL / Target (only for BUY signals) ─────────────────────
+        # ── Entry / SL / Target (only for actionable signals) ──────────────────
         if result["signal"] in ("STRONG BUY", "BUY") and close:
             sl_level = atr_30m["atr_stop"] if atr_30m else round(close * 0.985, 2)
             result["entry"]   = round(close, 2)
