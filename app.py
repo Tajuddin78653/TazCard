@@ -289,7 +289,7 @@ def main():
     h1, h2, h3 = st.columns([3, 2, 2])
     with h1:
         st.markdown("## 🃏 TazCard — NSE F&O Scanner")
-        st.caption("EMA · Bollinger Bands · MACD · ATR · Market Trend")
+        st.caption("EMA 13/50 · ATR Trailing Stop · MACD (12,26,9) · Market Trend Gated · 5-min chart")
     with h2:
         status_color = "#34d399" if market_open else "#ef4444"
         status_label = "🟢 Market Open" if market_open else "🔴 Market Closed"
