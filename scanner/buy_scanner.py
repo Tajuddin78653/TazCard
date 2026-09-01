@@ -3,15 +3,16 @@ BUY Scanner — your exact Chartink conditions:
   1. 5-min  EMA(5)  > EMA(200)           ← fast > slow = uptrend
   2. 30-min Close   > EMA(20)             ← above medium trend
   3. 30-min Close   > Upper BB(20,2)      ← 30-min BB breakout
-  4. 2-hour Close   > Upper BB(20,2)      ← higher TF BB breakout
+  4. 1-hour Close   > Upper BB(20,2)      ← higher TF BB breakout (1h replaces 2h — yfinance doesn't support 2h)
 
 All 4 must pass for a BUY signal.
 Score 0–100 based on conditions + ATR + MACD confirmation.
 
 Period notes:
-  - 5m  period="60d"  → yfinance max for 5m intraday; gives ~2250 bars (well above EMA200 need)
+  - 5m  period="60d"  → yfinance max for 5m; gives ~2250 bars (enough for EMA200)
   - 30m period="60d"  → gives ~480 bars; plenty for EMA20 + BB(20) + MACD
-  - 2h  period="730d" → gives ~650 bars; needed for BB(20) on 2h
+  - 1h  period="730d" → gives ~5000 bars; needed for BB(20) on higher TF
+  NOTE: yfinance does NOT support interval="2h" — using "1h" instead
 """
 
 import logging
@@ -23,9 +24,9 @@ from scanner.indicators import (
 logger = logging.getLogger(__name__)
 
 # yfinance period limits per interval
-PERIOD_5M  = "60d"   # max for 5m  (gives ~2250 bars — enough for EMA200)
-PERIOD_30M = "60d"   # max for 30m (gives ~480  bars — enough for EMA20+BB)
-PERIOD_2H  = "730d"  # 2h data (gives ~650 bars — enough for BB20)
+PERIOD_5M  = "60d"    # max for 5m  (gives ~2250 bars — enough for EMA200)
+PERIOD_30M = "60d"    # max for 30m (gives ~480  bars — enough for EMA20+BB)
+PERIOD_1H  = "730d"   # 1h data (yfinance max); gives ~5000 bars — enough for BB20
 
 
 def scan_buy(symbol: str) -> dict:
@@ -53,15 +54,16 @@ def scan_buy(symbol: str) -> dict:
     try:
         # ── Fetch OHLC for 3 timeframes ────────────────────────────────────────
         # 5m needs min_bars=210 to compute EMA(200) reliably
+        # NOTE: yfinance does NOT support interval="2h" → using "1h" instead
         df_5m  = fetch_ohlc(ticker, interval="5m",  period=PERIOD_5M,  min_bars=210)
         df_30m = fetch_ohlc(ticker, interval="30m", period=PERIOD_30M, min_bars=35)
-        df_2h  = fetch_ohlc(ticker, interval="2h",  period=PERIOD_2H,  min_bars=25)
+        df_1h  = fetch_ohlc(ticker, interval="1h",  period=PERIOD_1H,  min_bars=25)
 
-        if df_5m is None or df_30m is None or df_2h is None:
+        if df_5m is None or df_30m is None or df_1h is None:
             missing = []
             if df_5m  is None: missing.append("5m")
             if df_30m is None: missing.append("30m")
-            if df_2h  is None: missing.append("2h")
+            if df_1h  is None: missing.append("1h")
             result["error"] = f"Insufficient data ({', '.join(missing)})"
             return result
 
@@ -96,12 +98,13 @@ def scan_buy(symbol: str) -> dict:
         result["indicators"]["bb_upper_30m"] = round(bb_30m["upper"], 2) if bb_30m else None
         result["indicators"]["bb_lower_30m"] = round(bb_30m["lower"], 2) if bb_30m else None
 
-        # ── Condition 4: 2-hour Close > Upper BB(20,2) ─────────────────────────
-        close_2h = get_close(df_2h)
-        bb_2h    = calc_bb(df_2h, 20, 2.0)
-        cond4    = bool(close_2h and bb_2h and close_2h > bb_2h["upper"])
-        result["conditions"]["2h_close_gt_upper_bb"] = cond4
-        result["indicators"]["bb_upper_2h"] = round(bb_2h["upper"], 2) if bb_2h else None
+        # ── Condition 4: 1-hour Close > Upper BB(20,2) ─────────────────────────
+        # (1h used instead of 2h — yfinance does not support interval="2h")
+        close_1h = get_close(df_1h)
+        bb_1h    = calc_bb(df_1h, 20, 2.0)
+        cond4    = bool(close_1h and bb_1h and close_1h > bb_1h["upper"])
+        result["conditions"]["1h_close_gt_upper_bb"] = cond4
+        result["indicators"]["bb_upper_1h"] = round(bb_1h["upper"], 2) if bb_1h else None
 
         # ── Bonus: MACD confirmation on 30-min ─────────────────────────────────
         macd_30m  = calc_macd(df_30m)
