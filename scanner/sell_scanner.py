@@ -1,153 +1,138 @@
 """
-SELL Scanner — mirror of BUY conditions for bearish market:
-  1. 5-min  EMA(5)  < EMA(200)           ← fast < slow = downtrend
-  2. 30-min Close   < EMA(20)             ← below medium trend
-  3. 30-min Close   < Lower BB(20,2)      ← 30-min BB breakdown
-  4. 1-hour Close   < Lower BB(20,2)      ← higher TF BB breakdown (1h replaces 2h — yfinance doesn't support 2h)
+SELL Scanner — V2
+=================
+Exact mirror of BUY scanner. 5 conditions on 5-MIN chart only:
 
-All 4 must pass for a SELL/SHORT signal.
+  1. EMA 13 < EMA 50          → bearish crossover (trend structure)
+  2. Close  < EMA 13           → price below fast EMA
+  3. ATR Trailing Stop > Close → red/grey dots above price (sell active)
+  4. MACD line < Signal line   → momentum bearish
+  5. MACD Histogram < 0        → momentum growing bearish
 
-Period notes:
-  - 5m  period="60d"  → yfinance max for 5m; gives ~2250 bars (enough for EMA200)
-  - 30m period="60d"  → gives ~480 bars; plenty for EMA20 + BB(20) + MACD
-  - 1h  period="730d" → gives ~5000 bars; needed for BB(20) on higher TF
-  NOTE: yfinance does NOT support interval="2h" — using "1h" instead
+Score: 5 × 20 pts = 100
+  100 → STRONG SELL  (all 5)
+   80 → SELL         (4 of 5)
+   60 → WATCH        (3 of 5)
+  ≤40 → SKIP
+
+SL  = ATR Trailing Stop value (dynamic — dot above price for short)
+T1  = entry − (sl − entry) × 1.0   → 1:1 R/R downside
+T2  = entry − (sl − entry) × 2.0   → 1:2 R/R downside
 """
 
+from __future__ import annotations
 import logging
 from scanner.indicators import (
-    fetch_ohlc, fetch_daily_change, calc_ema, calc_bb, calc_macd,
-    calc_atr_trailing_stop, get_close, get_change_pct
+    fetch_ohlc, fetch_daily_change,
+    calc_ema, calc_macd, calc_atr_trailing_stop,
+    get_close, get_change_pct,
 )
 
 logger = logging.getLogger(__name__)
 
-# yfinance period limits per interval
-PERIOD_5M  = "60d"
-PERIOD_30M = "60d"
-PERIOD_1H  = "730d"   # 1h used instead of 2h (yfinance doesn't support 2h)
+PERIOD_5M = "60d"
 
 
 def scan_sell(symbol: str) -> dict:
     """
-    Run SELL/SHORT scanner on a single F&O symbol.
-    Returns full result dict including pass/fail per condition and score.
+    Run SELL/SHORT scanner on a single NSE F&O symbol.
+    Uses 5-min chart only — exact mirror of buy_scanner.
     """
     result = {
-        "symbol":       symbol,
-        "signal":       "SKIP",
-        "score":        0,
-        "close":        None,
-        "change_pct":   None,
-        "entry":        None,
-        "sl":           None,
-        "target1":      None,
-        "target2":      None,
-        "conditions":   {},
-        "indicators":   {},
-        "error":        None,
+        "symbol":      symbol,
+        "signal":      "SKIP",
+        "score":       0,
+        "close":       None,
+        "change_pct":  None,
+        "entry":       None,
+        "sl":          None,
+        "sl_pct":      None,
+        "target1":     None,
+        "target2":     None,
+        "risk_reward": None,
+        "conditions":  {},
+        "indicators":  {},
+        "error":       None,
     }
 
     ticker = f"{symbol}.NS"
 
     try:
-        # ── Fetch OHLC for 3 timeframes ────────────────────────────────────────
-        # NOTE: yfinance does NOT support interval="2h" → using "1h" instead
-        df_5m  = fetch_ohlc(ticker, interval="5m",  period=PERIOD_5M,  min_bars=210)
-        df_30m = fetch_ohlc(ticker, interval="30m", period=PERIOD_30M, min_bars=35)
-        df_1h  = fetch_ohlc(ticker, interval="1h",  period=PERIOD_1H,  min_bars=25)
+        # ── Fetch 5-min OHLC ────────────────────────────────────────────────
+        df = fetch_ohlc(ticker, interval="5m", period=PERIOD_5M, min_bars=60)
 
-        if df_5m is None or df_30m is None or df_1h is None:
-            missing = []
-            if df_5m  is None: missing.append("5m")
-            if df_30m is None: missing.append("30m")
-            if df_1h  is None: missing.append("1h")
-            result["error"] = f"Insufficient data ({', '.join(missing)})"
+        if df is None:
+            result["error"] = "Insufficient 5m data"
             return result
 
-        close = get_close(df_5m)
+        close = get_close(df)
         if not close:
             result["error"] = "No price data"
             return result
 
         result["close"]      = round(close, 2)
-        result["change_pct"] = fetch_daily_change(ticker) or get_change_pct(df_5m)
+        result["change_pct"] = fetch_daily_change(ticker) or get_change_pct(df)
 
-        # ── Condition 1: 5-min EMA(5) < EMA(200) ───────────────────────────────
-        ema5_5m   = calc_ema(df_5m, 5)
-        ema200_5m = calc_ema(df_5m, 200)
-        cond1 = bool(ema5_5m and ema200_5m and ema5_5m < ema200_5m)
-        result["conditions"]["5m_ema5_lt_ema200"] = cond1
-        result["indicators"]["ema5_5m"]           = round(ema5_5m,   2) if ema5_5m   else None
-        result["indicators"]["ema200_5m"]         = round(ema200_5m, 2) if ema200_5m else None
+        # ── Indicator calculations ───────────────────────────────────────────
+        ema13 = calc_ema(df, 13)
+        ema50 = calc_ema(df, 50)
+        macd  = calc_macd(df)
+        atr   = calc_atr_trailing_stop(df)
 
-        # ── Condition 2: 30-min Close < EMA(20) ────────────────────────────────
-        close_30m = get_close(df_30m)
-        ema20_30m = calc_ema(df_30m, 20)
-        cond2 = bool(close_30m and ema20_30m and close_30m < ema20_30m)
-        result["conditions"]["30m_close_lt_ema20"] = cond2
-        result["indicators"]["ema20_30m"]          = round(ema20_30m, 2) if ema20_30m else None
+        result["indicators"]["ema13"]     = round(ema13, 2)             if ema13 else None
+        result["indicators"]["ema50"]     = round(ema50, 2)             if ema50 else None
+        result["indicators"]["macd_line"] = round(macd["macd"],    2)   if macd  else None
+        result["indicators"]["macd_sig"]  = round(macd["signal"],  2)   if macd  else None
+        result["indicators"]["macd_hist"] = round(macd["histogram"],2)  if macd  else None
+        result["indicators"]["atr_stop"]  = atr["atr_stop"]             if atr   else None
 
-        # ── Condition 3: 30-min Close < Lower BB(20,2) ─────────────────────────
-        bb_30m = calc_bb(df_30m, 20, 2.0)
-        cond3  = bool(close_30m and bb_30m and close_30m < bb_30m["lower"])
-        result["conditions"]["30m_close_lt_lower_bb"] = cond3
-        result["indicators"]["bb_upper_30m"] = round(bb_30m["upper"], 2) if bb_30m else None
-        result["indicators"]["bb_lower_30m"] = round(bb_30m["lower"], 2) if bb_30m else None
+        # ── Condition 1: EMA 13 < EMA 50 (bearish crossover) ────────────────
+        c1 = bool(ema13 and ema50 and ema13 < ema50)
+        result["conditions"]["ema13_lt_ema50"] = c1
 
-        # ── Condition 4: 1-hour Close < Lower BB(20,2) ─────────────────────────
-        # (1h used instead of 2h — yfinance does not support interval="2h")
-        close_1h = get_close(df_1h)
-        bb_1h    = calc_bb(df_1h, 20, 2.0)
-        cond4    = bool(close_1h and bb_1h and close_1h < bb_1h["lower"])
-        result["conditions"]["1h_close_lt_lower_bb"] = cond4
-        result["indicators"]["bb_lower_1h"] = round(bb_1h["lower"], 2) if bb_1h else None
+        # ── Condition 2: Close < EMA 13 (price below fast EMA) ──────────────
+        c2 = bool(ema13 and close < ema13)
+        result["conditions"]["close_lt_ema13"] = c2
 
-        # ── Bonus: MACD bearish on 30-min ──────────────────────────────────────
-        macd_30m  = calc_macd(df_30m)
-        macd_bear = bool(
-            macd_30m and
-            macd_30m["macd"] < macd_30m["signal"] and
-            macd_30m["histogram"] < 0
-        )
-        result["conditions"]["30m_macd_bearish"] = macd_bear
-        result["indicators"]["macd_30m"]  = round(macd_30m["macd"],      2) if macd_30m else None
-        result["indicators"]["macd_hist"] = round(macd_30m["histogram"],  2) if macd_30m else None
+        # ── Condition 3: ATR Trailing Stop above price (sell signal active) ──
+        c3 = bool(atr and atr["signal"] == "sell")
+        result["conditions"]["atr_stop_above"] = c3
 
-        # ── Bonus: ATR Trailing Stop sell signal ────────────────────────────────
-        atr_30m  = calc_atr_trailing_stop(df_30m)
-        atr_bear = bool(atr_30m and atr_30m["signal"] == "sell")
-        result["conditions"]["30m_atr_sell"]  = atr_bear
-        result["indicators"]["atr_stop_30m"]  = atr_30m["atr_stop"] if atr_30m else None
+        # ── Condition 4: MACD line < Signal line (bearish momentum) ──────────
+        c4 = bool(macd and macd["macd"] < macd["signal"])
+        result["conditions"]["macd_line_lt_signal"] = c4
 
-        # ── Score ───────────────────────────────────────────────────────────────
-        score = 0
-        if cond1:      score += 20
-        if cond2:      score += 20
-        if cond3:      score += 25
-        if cond4:      score += 25
-        if macd_bear:  score +=  5
-        if atr_bear:   score +=  5
+        # ── Condition 5: MACD Histogram negative (momentum growing bearish) ──
+        c5 = bool(macd and macd["histogram"] < 0)
+        result["conditions"]["macd_hist_negative"] = c5
+
+        # ── Score ────────────────────────────────────────────────────────────
+        score = sum([c1, c2, c3, c4, c5]) * 20
         result["score"] = score
 
-        # ── Signal label ────────────────────────────────────────────────────────
-        all_4 = cond1 and cond2 and cond3 and cond4
-        if all_4 and score >= 90:
+        # ── Signal label ─────────────────────────────────────────────────────
+        if score == 100:
             result["signal"] = "STRONG SELL"
-        elif all_4:
+        elif score == 80:
             result["signal"] = "SELL"
-        elif score >= 40:
+        elif score == 60:
             result["signal"] = "WATCH"
         else:
             result["signal"] = "SKIP"
 
-        # ── Entry / SL / Target ─────────────────────────────────────────────────
-        if result["signal"] in ("STRONG SELL", "SELL") and close:
-            sl_level = atr_30m["atr_stop"] if atr_30m else round(close * 1.015, 2)
-            result["entry"]   = round(close, 2)
-            result["sl"]      = round(sl_level, 2)       # SL ABOVE entry for short
-            result["target1"] = round(close * 0.995, 2)  # -0.5%
-            result["target2"] = round(close * 0.990, 2)  # -1.0%
+        # ── Entry / SL / Targets ─────────────────────────────────────────────
+        if result["signal"] in ("STRONG SELL", "SELL") and atr:
+            sl   = atr["atr_stop"]          # ATR stop is ABOVE price for short
+            risk = sl - close               # risk per unit (short)
+            if risk > 0:
+                t1 = round(close - risk * 1.0, 2)   # 1:1 downside
+                t2 = round(close - risk * 2.0, 2)   # 1:2 downside
+                result["entry"]       = round(close, 2)
+                result["sl"]          = round(sl, 2)
+                result["sl_pct"]      = round(risk / close * 100, 2)
+                result["target1"]     = t1
+                result["target2"]     = t2
+                result["risk_reward"] = "1:2"
 
     except Exception as e:
         logger.warning("SELL scan error %s: %s", symbol, e)
