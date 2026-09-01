@@ -1,158 +1,141 @@
 """
-BUY Scanner — your exact Chartink conditions:
-  1. 5-min  EMA(5)  > EMA(200)           ← fast > slow = uptrend
-  2. 30-min Close   > EMA(20)             ← above medium trend
-  3. 30-min Close   > Upper BB(20,2)      ← 30-min BB breakout
-  4. 1-hour Close   > Upper BB(20,2)      ← higher TF BB breakout (1h replaces 2h — yfinance doesn't support 2h)
+BUY Scanner — V2
+================
+5 conditions on 5-MIN chart only (matches your Zerodha setup):
 
-All 4 must pass for a BUY signal.
-Score 0–100 based on conditions + ATR + MACD confirmation.
+  1. EMA 13 > EMA 50          → bullish crossover (trend structure)
+  2. Close  > EMA 13           → price above fast EMA
+  3. ATR Trailing Stop < Close → green dots below price (buy active)
+  4. MACD line > Signal line   → momentum bullish
+  5. MACD Histogram > 0        → momentum growing (not just crossed)
 
-Period notes:
-  - 5m  period="60d"  → yfinance max for 5m; gives ~2250 bars (enough for EMA200)
-  - 30m period="60d"  → gives ~480 bars; plenty for EMA20 + BB(20) + MACD
-  - 1h  period="730d" → gives ~5000 bars; needed for BB(20) on higher TF
-  NOTE: yfinance does NOT support interval="2h" — using "1h" instead
+Score: 5 × 20 pts = 100
+  100 → STRONG BUY  (all 5)
+   80 → BUY         (4 of 5)
+   60 → WATCH       (3 of 5)
+  ≤40 → SKIP
+
+SL  = ATR Trailing Stop value (dynamic, matches Zerodha green dot)
+T1  = entry + (entry − sl) × 1.0   → 1:1 R/R
+T2  = entry + (entry − sl) × 2.0   → 1:2 R/R
 """
 
+from __future__ import annotations
 import logging
 from scanner.indicators import (
-    fetch_ohlc, fetch_daily_change, calc_ema, calc_bb, calc_macd,
-    calc_atr_trailing_stop, get_close, get_change_pct
+    fetch_ohlc, fetch_daily_change,
+    calc_ema, calc_macd, calc_atr_trailing_stop,
+    get_close, get_change_pct,
 )
 
 logger = logging.getLogger(__name__)
 
-# yfinance period limits per interval
-PERIOD_5M  = "60d"    # max for 5m  (gives ~2250 bars — enough for EMA200)
-PERIOD_30M = "60d"    # max for 30m (gives ~480  bars — enough for EMA20+BB)
-PERIOD_1H  = "730d"   # 1h data (yfinance max); gives ~5000 bars — enough for BB20
+# 5-min data: period="60d" gives ~2250 bars — enough for EMA50 and ATR
+PERIOD_5M = "60d"
 
 
 def scan_buy(symbol: str) -> dict:
     """
-    Run BUY scanner on a single F&O symbol.
-    Returns full result dict including pass/fail per condition and score.
+    Run BUY scanner on a single NSE F&O symbol.
+    Uses 5-min chart only — same as Zerodha Kite chart.
     """
     result = {
-        "symbol":       symbol,
-        "signal":       "SKIP",
-        "score":        0,
-        "close":        None,
-        "change_pct":   None,
-        "entry":        None,
-        "sl":           None,
-        "target1":      None,
-        "target2":      None,
-        "conditions":   {},
-        "indicators":   {},
-        "error":        None,
+        "symbol":     symbol,
+        "signal":     "SKIP",
+        "score":      0,
+        "close":      None,
+        "change_pct": None,
+        "entry":      None,
+        "sl":         None,
+        "sl_pct":     None,
+        "target1":    None,
+        "target2":    None,
+        "risk_reward": None,
+        "conditions": {},
+        "indicators": {},
+        "error":      None,
     }
 
     ticker = f"{symbol}.NS"
 
     try:
-        # ── Fetch OHLC for 3 timeframes ────────────────────────────────────────
-        # 5m needs min_bars=210 to compute EMA(200) reliably
-        # NOTE: yfinance does NOT support interval="2h" → using "1h" instead
-        df_5m  = fetch_ohlc(ticker, interval="5m",  period=PERIOD_5M,  min_bars=210)
-        df_30m = fetch_ohlc(ticker, interval="30m", period=PERIOD_30M, min_bars=35)
-        df_1h  = fetch_ohlc(ticker, interval="1h",  period=PERIOD_1H,  min_bars=25)
+        # ── Fetch 5-min OHLC ────────────────────────────────────────────────
+        # Need min 60 bars for EMA50; 60d gives ~2250 bars
+        df = fetch_ohlc(ticker, interval="5m", period=PERIOD_5M, min_bars=60)
 
-        if df_5m is None or df_30m is None or df_1h is None:
-            missing = []
-            if df_5m  is None: missing.append("5m")
-            if df_30m is None: missing.append("30m")
-            if df_1h  is None: missing.append("1h")
-            result["error"] = f"Insufficient data ({', '.join(missing)})"
+        if df is None:
+            result["error"] = "Insufficient 5m data"
             return result
 
-        close = get_close(df_5m)
+        close = get_close(df)
         if not close:
             result["error"] = "No price data"
             return result
 
         result["close"]      = round(close, 2)
-        # Use daily change for accurate % move
-        result["change_pct"] = fetch_daily_change(ticker) or get_change_pct(df_5m)
+        result["change_pct"] = fetch_daily_change(ticker) or get_change_pct(df)
 
-        # ── Condition 1: 5-min EMA(5) > EMA(200) ───────────────────────────────
-        ema5_5m   = calc_ema(df_5m, 5)
-        ema200_5m = calc_ema(df_5m, 200)
-        cond1 = bool(ema5_5m and ema200_5m and ema5_5m > ema200_5m)
-        result["conditions"]["5m_ema5_gt_ema200"] = cond1
-        result["indicators"]["ema5_5m"]           = round(ema5_5m,   2) if ema5_5m   else None
-        result["indicators"]["ema200_5m"]         = round(ema200_5m, 2) if ema200_5m else None
+        # ── Indicator calculations ───────────────────────────────────────────
+        ema13 = calc_ema(df, 13)
+        ema50 = calc_ema(df, 50)
+        macd  = calc_macd(df)
+        atr   = calc_atr_trailing_stop(df)
 
-        # ── Condition 2: 30-min Close > EMA(20) ────────────────────────────────
-        close_30m = get_close(df_30m)
-        ema20_30m = calc_ema(df_30m, 20)
-        cond2 = bool(close_30m and ema20_30m and close_30m > ema20_30m)
-        result["conditions"]["30m_close_gt_ema20"] = cond2
-        result["indicators"]["ema20_30m"]          = round(ema20_30m, 2) if ema20_30m else None
+        # Store raw indicator values for display
+        result["indicators"]["ema13"]      = round(ema13, 2)        if ema13 else None
+        result["indicators"]["ema50"]      = round(ema50, 2)        if ema50 else None
+        result["indicators"]["macd_line"]  = round(macd["macd"], 2) if macd  else None
+        result["indicators"]["macd_sig"]   = round(macd["signal"],2) if macd  else None
+        result["indicators"]["macd_hist"]  = round(macd["histogram"],2) if macd else None
+        result["indicators"]["atr_stop"]   = atr["atr_stop"]        if atr   else None
 
-        # ── Condition 3: 30-min Close > Upper BB(20,2) ─────────────────────────
-        bb_30m = calc_bb(df_30m, 20, 2.0)
-        cond3  = bool(close_30m and bb_30m and close_30m > bb_30m["upper"])
-        result["conditions"]["30m_close_gt_upper_bb"] = cond3
-        result["indicators"]["bb_upper_30m"] = round(bb_30m["upper"], 2) if bb_30m else None
-        result["indicators"]["bb_lower_30m"] = round(bb_30m["lower"], 2) if bb_30m else None
+        # ── Condition 1: EMA 13 > EMA 50 (bullish crossover) ────────────────
+        c1 = bool(ema13 and ema50 and ema13 > ema50)
+        result["conditions"]["ema13_gt_ema50"] = c1
 
-        # ── Condition 4: 1-hour Close > Upper BB(20,2) ─────────────────────────
-        # (1h used instead of 2h — yfinance does not support interval="2h")
-        close_1h = get_close(df_1h)
-        bb_1h    = calc_bb(df_1h, 20, 2.0)
-        cond4    = bool(close_1h and bb_1h and close_1h > bb_1h["upper"])
-        result["conditions"]["1h_close_gt_upper_bb"] = cond4
-        result["indicators"]["bb_upper_1h"] = round(bb_1h["upper"], 2) if bb_1h else None
+        # ── Condition 2: Close > EMA 13 (price above fast EMA) ──────────────
+        c2 = bool(ema13 and close > ema13)
+        result["conditions"]["close_gt_ema13"] = c2
 
-        # ── Bonus: MACD confirmation on 30-min ─────────────────────────────────
-        macd_30m  = calc_macd(df_30m)
-        macd_bull = bool(
-            macd_30m and
-            macd_30m["macd"] > macd_30m["signal"] and
-            macd_30m["histogram"] > 0
-        )
-        result["conditions"]["30m_macd_bullish"] = macd_bull
-        result["indicators"]["macd_30m"]  = round(macd_30m["macd"],      2) if macd_30m else None
-        result["indicators"]["macd_hist"] = round(macd_30m["histogram"],  2) if macd_30m else None
+        # ── Condition 3: ATR Trailing Stop below price (green dots) ──────────
+        c3 = bool(atr and atr["signal"] == "buy")
+        result["conditions"]["atr_stop_below"] = c3
 
-        # ── Bonus: ATR Trailing Stop on 30-min ─────────────────────────────────
-        atr_30m  = calc_atr_trailing_stop(df_30m)
-        atr_bull = bool(atr_30m and atr_30m["signal"] == "buy")
-        result["conditions"]["30m_atr_buy"]  = atr_bull
-        result["indicators"]["atr_stop_30m"] = atr_30m["atr_stop"] if atr_30m else None
+        # ── Condition 4: MACD line > Signal line ────────────────────────────
+        c4 = bool(macd and macd["macd"] > macd["signal"])
+        result["conditions"]["macd_line_gt_signal"] = c4
 
-        # ── Score ───────────────────────────────────────────────────────────────
-        score = 0
-        if cond1:      score += 20   # 5-min EMA trend
-        if cond2:      score += 20   # 30-min above EMA
-        if cond3:      score += 25   # 30-min BB breakout
-        if cond4:      score += 25   # 2-hour BB breakout
-        if macd_bull:  score +=  5   # MACD bonus
-        if atr_bull:   score +=  5   # ATR bonus
+        # ── Condition 5: MACD Histogram positive (momentum growing) ──────────
+        c5 = bool(macd and macd["histogram"] > 0)
+        result["conditions"]["macd_hist_positive"] = c5
+
+        # ── Score ────────────────────────────────────────────────────────────
+        score = sum([c1, c2, c3, c4, c5]) * 20
         result["score"] = score
 
-        # ── Signal label ────────────────────────────────────────────────────────
-        all_4 = cond1 and cond2 and cond3 and cond4
-        if all_4 and score >= 90:
+        # ── Signal label ─────────────────────────────────────────────────────
+        if score == 100:
             result["signal"] = "STRONG BUY"
-        elif all_4:
+        elif score == 80:
             result["signal"] = "BUY"
-        elif score >= 60:
+        elif score == 60:
             result["signal"] = "WATCH"
-        elif score >= 40:
-            result["signal"] = "WATCH"   # show partial matches too
         else:
             result["signal"] = "SKIP"
 
-        # ── Entry / SL / Target (only for actionable signals) ──────────────────
-        if result["signal"] in ("STRONG BUY", "BUY") and close:
-            sl_level = atr_30m["atr_stop"] if atr_30m else round(close * 0.985, 2)
-            result["entry"]   = round(close, 2)
-            result["sl"]      = round(sl_level, 2)
-            result["target1"] = round(close * 1.005, 2)   # +0.5%
-            result["target2"] = round(close * 1.010, 2)   # +1.0%
+        # ── Entry / SL / Targets (only for actionable signals) ───────────────
+        if result["signal"] in ("STRONG BUY", "BUY") and atr:
+            sl     = atr["atr_stop"]          # ATR Trailing Stop = dynamic SL
+            risk   = close - sl               # risk per unit
+            if risk > 0:
+                t1 = round(close + risk * 1.0, 2)   # 1:1 R/R
+                t2 = round(close + risk * 2.0, 2)   # 1:2 R/R
+                result["entry"]      = round(close, 2)
+                result["sl"]         = round(sl, 2)
+                result["sl_pct"]     = round(risk / close * 100, 2)
+                result["target1"]    = t1
+                result["target2"]    = t2
+                result["risk_reward"] = "1:2"
 
     except Exception as e:
         logger.warning("BUY scan error %s: %s", symbol, e)
