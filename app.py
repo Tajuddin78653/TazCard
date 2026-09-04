@@ -1,7 +1,7 @@
 """
 TazCard - NSE F&O Stock Scanner
 ================================
-V3 — 2-min chart + Auto-refresh every 2 min + Daily Report tab
+V3 — 2-min chart + Auto-refresh every 5 min + Daily Report tab
 
 Tab 1: Live Scanner  — BUY / SELL / WATCH columns (auto-refreshes every 2 min)
 Tab 2: Daily Report  — Every triggered signal logged with timestamp, entry, SL, T1, T2, status
@@ -488,16 +488,16 @@ def main():
     now_ist     = datetime.now(IST)
     market_open = is_market_open()
 
-    # Auto-refresh every 2 minutes — ONLY during market hours
+    # Auto-refresh every 5 minutes — ONLY during market hours
     if market_open:
-        refresh_count = st_autorefresh(interval=120_000, key="auto_refresh_2m")
+        refresh_count = st_autorefresh(interval=300_000, key="auto_refresh_5m")
     else:
         refresh_count = 0
 
     h1, h2, h3 = st.columns([3, 2, 2])
     with h1:
         st.markdown("## \U0001f4e1 TazCard - NSE F&O Scanner")
-        st.caption("EMA 13/50 \u00b7 ATR Trailing Stop \u00b7 MACD (12,26,9) \u00b7 2-min chart \u00b7 Auto-refresh every 2 min during market hours")
+        st.caption("EMA 13/50 \u00b7 ATR Trailing Stop \u00b7 MACD (12,26,9) \u00b7 2-min chart \u00b7 Auto-refresh every 5 min during market hours")
     with h2:
         sc = "#34d399" if market_open else "#ef4444"
         sl = "\U0001f7e2 Market Open" if market_open else "\U0001f534 Market Closed"
@@ -535,7 +535,7 @@ def main():
     # Auto-scan on refresh (skip count=0 which is initial page load)
     if market_open and refresh_count > 0:
         ph = st.empty()
-        ph.info(f"\U0001f504 Auto-refresh #{refresh_count} \u2014 scanning {len(symbols_all)} stocks on 2-min chart...")
+        ph.info(f"\U0001f504 Auto-refresh #${refresh_count} (5-min) u2014 scanning {len(symbols_all)} stocks on 2-min chart...")
         execute_scan(symbols_all, scan_mode, min_score, show_progress=False)
         ph.empty()
 
