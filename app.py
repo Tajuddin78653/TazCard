@@ -69,6 +69,19 @@ def is_market_open() -> bool:
     )
 
 
+def is_scan_ready() -> bool:
+    """Auto-scan only fires from 9:20 AM to avoid opening chaos (first 5 min)."""
+    now = datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    return (
+        now.replace(hour=9,  minute=20, second=0, microsecond=0).time()
+        <= t <=
+        now.replace(hour=15, minute=30, second=0, microsecond=0).time()
+    )
+
+
 def fmt_price(v):
     try:
         return f"\u20b9{float(v):,.2f}"
@@ -533,7 +546,7 @@ def main():
     symbols_all = get_fno_symbols()[:max_stocks]
 
     # Auto-scan on refresh (skip count=0 which is initial page load)
-    if market_open and refresh_count > 0:
+    if is_scan_ready() and refresh_count > 0:
         ph = st.empty()
         ph.info(f"\U0001f504 Auto-refresh #${refresh_count} (5-min) u2014 scanning {len(symbols_all)} stocks on 2-min chart...")
         execute_scan(symbols_all, scan_mode, min_score, show_progress=False)
@@ -581,7 +594,7 @@ def main():
             m5.metric("\U0001f441 Watch",      len(watch))
 
             if st.session_state.get("scan_time"):
-                st.caption(f"Last scan: {st.session_state['scan_time']} \u00b7 Mode: {st.session_state.get('scan_mode','')} \u00b7 Chart: 2-min \u00b7 \u26a0\ufe0f Not financial advice.")
+                st.caption(f"Last scan: {st.session_state['scan_time']} \u00b7 Mode: {st.session_state.get('scan_mode','')} \u00b7 Chart: 5-min \u00b7 \u26a0\ufe0f Not financial advice.")
 
             st.divider()
             col_buy, col_sell, col_watch = st.columns(3)
