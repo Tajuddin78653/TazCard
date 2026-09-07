@@ -548,7 +548,7 @@ def main():
     # Auto-scan on refresh (skip count=0 which is initial page load)
     if is_scan_ready() and refresh_count > 0:
         ph = st.empty()
-        ph.info(f"\U0001f504 Auto-refresh #${refresh_count} (5-min) u2014 scanning {len(symbols_all)} stocks on 2-min chart...")
+        ph.info(f"\U0001f504 Auto-refresh #${refresh_count} (5-min) u2014 scanning {len(symbols_all)} stocks on 5-min chart...")
         execute_scan(symbols_all, scan_mode, min_score, show_progress=False)
         ph.empty()
 
