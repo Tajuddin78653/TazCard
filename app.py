@@ -285,7 +285,7 @@ def render_market_pulse(pulse: dict):
 <div style="background:{db};border:2px solid {dc};border-radius:12px;padding:14px 18px;margin-bottom:16px">
   <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div>
-      <div style="font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:1px">MARKET TREND (Nifty 2-min)</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:1px">MARKET TREND (Nifty 5-min)</div>
       <div style="font-size:24px;font-weight:900;color:{dc}">{overall}</div>
       <div style="font-size:11px;margin-top:4px">{checks}</div>
     </div>
@@ -296,7 +296,7 @@ def render_market_pulse(pulse: dict):
       <div><div style="font-size:18px;font-weight:800;color:#60a5fa">{ratio}</div><div style="font-size:10px;color:#94a3b8">A/D Ratio</div></div>
     </div>
     <div style="text-align:right">
-      <div style="font-size:11px;color:#94a3b8">Nifty 50 (2-min)</div>
+      <div style="font-size:11px;color:#94a3b8">Nifty 50 (5-min)</div>
       <div style="font-size:20px;font-weight:700;color:#fff">{fmt_price(nifty.get("close"))}</div>
       <div style="font-size:11px;color:#94a3b8">EMA13:{fmt_price(nifty.get("ema13"))} | EMA50:{fmt_price(nifty.get("ema50"))} | MACD:{nifty.get("macd","-")}</div>
     </div>
@@ -502,7 +502,7 @@ def main():
     market_open = is_market_open()
 
     # Auto-refresh every 5 minutes — ONLY during market hours
-    if market_open:
+    if is_scan_ready():
         refresh_count = st_autorefresh(interval=300_000, key="auto_refresh_5m")
     else:
         refresh_count = 0
@@ -510,7 +510,7 @@ def main():
     h1, h2, h3 = st.columns([3, 2, 2])
     with h1:
         st.markdown("## \U0001f4e1 TazCard - NSE F&O Scanner")
-        st.caption("EMA 13/50 \u00b7 ATR Trailing Stop \u00b7 MACD (12,26,9) \u00b7 2-min chart \u00b7 Auto-refresh every 5 min during market hours")
+        st.caption("EMA 13/50 \u00b7 ATR Trailing Stop \u00b7 MACD (12,26,9) \u00b7 5-min chart \u00b7 Auto-refresh every 5 min (from 9:20 AM)")
     with h2:
         sc = "#34d399" if market_open else "#ef4444"
         sl = "\U0001f7e2 Market Open" if market_open else "\U0001f534 Market Closed"
@@ -548,7 +548,7 @@ def main():
     # Auto-scan on refresh (skip count=0 which is initial page load)
     if is_scan_ready() and refresh_count > 0:
         ph = st.empty()
-        ph.info(f"\U0001f504 Auto-refresh #${refresh_count} (5-min) u2014 scanning {len(symbols_all)} stocks on 5-min chart...")
+        ph.info(f"\U0001f504 Auto-refresh #{refresh_count} \u2014 scanning {len(symbols_all)} stocks on 5-min chart...")
         execute_scan(symbols_all, scan_mode, min_score, show_progress=False)
         ph.empty()
 
