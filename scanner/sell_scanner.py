@@ -1,7 +1,7 @@
 """
 SELL Scanner - V2
 =================
-Exact mirror of BUY scanner. 5 conditions on 2-MIN chart:
+Exact mirror of BUY scanner. 5 conditions on 5-MIN chart:
 
   1. EMA 13 < EMA 50           bearish crossover
   2. Close  < EMA 13            price below fast EMA
@@ -30,13 +30,13 @@ from scanner.indicators import (
 
 logger = logging.getLogger(__name__)
 
-PERIOD_2M = "60d"
+PERIOD_5M = "60d"
 
 
 def scan_sell(symbol: str) -> dict:
     """
     Run SELL/SHORT scanner on a single NSE F&O symbol.
-    Uses 2-min chart — exact mirror of buy_scanner.
+    Uses 5-min chart - exact mirror of buy_scanner.
     """
     result = {
         "symbol":      symbol,
@@ -58,10 +58,10 @@ def scan_sell(symbol: str) -> dict:
     ticker = f"{symbol}.NS"
 
     try:
-        df = fetch_ohlc(ticker, interval="2m", period=PERIOD_2M, min_bars=60)
+        df = fetch_ohlc(ticker, interval="5m", period=PERIOD_5M, min_bars=60)
 
         if df is None:
-            result["error"] = "Insufficient 2m data"
+            result["error"] = "Insufficient 5m data"
             return result
 
         close = get_close(df)
