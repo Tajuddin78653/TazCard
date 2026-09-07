@@ -1,9 +1,9 @@
 """
 Market Trend Engine - V2
 ========================
-Uses Nifty 50 on 2-MIN chart (upgraded from 5m for faster detection).
+Uses Nifty 50 on 5-min chart (upgraded from 5m for faster detection).
 
-3 checks on Nifty 2-min:
+3 checks on Nifty 5-min:
   1. EMA 13 > EMA 50           trend structure bullish
   2. ATR Trailing Stop < price  buy signal active
   3. MACD line > Signal line    momentum positive
@@ -100,7 +100,7 @@ def get_advance_decline() -> dict:
 
 def get_nifty_trend() -> dict:
     """
-    Check Nifty 50 on 2-MIN chart using EMA 13/50 + ATR Trailing Stop + MACD.
+    Check Nifty 50 on 5-min chart using EMA 13/50 + ATR Trailing Stop + MACD.
     Upgraded from 5m to 2m for faster trend detection.
     """
     result = {
@@ -119,10 +119,10 @@ def get_nifty_trend() -> dict:
     }
 
     try:
-        # 2-min Nifty — period="5d" gives ~1200 bars, enough for EMA50
-        df = fetch_ohlc(NIFTY_TICKER, interval="2m", period="5d", min_bars=60)
+        # 5-min Nifty — period="60d" gives ~1200 bars, enough for EMA50
+        df = fetch_ohlc(NIFTY_TICKER, interval="5m", period="60d", min_bars=60)
         if df is None:
-            logger.warning("Could not fetch Nifty 2-min data")
+            logger.warning("Could not fetch Nifty 5-min data")
             return result
 
         close = get_close(df)
@@ -176,7 +176,7 @@ def get_nifty_trend() -> dict:
 
 def get_market_pulse() -> dict:
     """
-    Combined: Nifty 2-min trend + Advance/Decline ratio.
+    Combined: Nifty 5-min trend + Advance/Decline ratio.
     """
     nifty = get_nifty_trend()
     ad    = get_advance_decline()
