@@ -1,7 +1,7 @@
 """
 TazCard - NSE F&O Stock Scanner
 ================================
-V3 — 2-min chart + Auto-refresh every 5 min + Daily Report tab
+V3 - 5-min chart + Auto-refresh every 5 min + Daily Report tab
 
 Tab 1: Live Scanner  — BUY / SELL / WATCH columns (auto-refreshes every 2 min)
 Tab 2: Daily Report  — Every triggered signal logged with timestamp, entry, SL, T1, T2, status
